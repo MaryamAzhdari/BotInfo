@@ -1,0 +1,270 @@
+//+------------------------------------------------------------------+
+//|                                                  BotInfo.mq5      |
+//|                                      Copyright 2024, FinanceTech |
+//|                                  maryamazhdari.mailbox@gmail.com |
+//+------------------------------------------------------------------+
+#property copyright "Copyright 2024, MetaQuotes Ltd."
+#property link      "https://www.mql5.com"
+#property version   "1.10"
+
+//Showing TickValue
+//Showing Sessions time and price
+//Showing the loss base open positions or fill inputs
+
+double todayOpen = -1;
+input double todayBalance = -1;          // Today Balance
+input double riskOfPerPosition = 0.5;    // Risk Of Per Position (%)
+
+// --- NEW INPUTS ---
+input double EntryPrice = 0;   // Entry Price
+input double StopLoss   = 0;   // Stop Loss
+input double Lots       = 0.1; // Lot Size
+
+double var_TodayBalance = -1;
+
+//+------------------------------------------------------------------+
+int OnInit()
+  {
+   var_TodayBalance = todayBalance;
+   return(INIT_SUCCEEDED);
+  }
+//+------------------------------------------------------------------+
+void OnTick()
+  {
+// Detect new day
+   if(iOpen(_Symbol,PERIOD_D1,0) != todayOpen)
+     {
+      todayOpen = iOpen(_Symbol,PERIOD_D1,0);
+      if(todayBalance == -1)
+         var_TodayBalance = AccountInfoDouble(ACCOUNT_BALANCE);
+     }
+
+
+   string slInfo = CalculateSLInfoSmart(EntryPrice, StopLoss, Lots);
+
+   string sessionInfo = GetSessionsInfo();
+   Comment("\n\n",
+           warnings(true), "\n\n",
+           slInfo,"\n\n",
+           sessionInfo
+          );
+
+
+  }
+//+------------------------------------------------------------------+
+string warnings(bool enabled)
+  {
+   string result = "";
+   if(enabled)
+     {
+      string riskPerPosition =
+         "Risk Of Per Position (" + DoubleToString(riskOfPerPosition,2) + "%) : " +
+         DoubleToString(var_TodayBalance * riskOfPerPosition / 100,0);
+
+      double todayProfit_loss = (AccountInfoDouble(ACCOUNT_EQUITY) - var_TodayBalance);
+
+      string warningForLoss = "";
+      if(todayProfit_loss < 0 && MathAbs(todayProfit_loss) >= (var_TodayBalance * 2 / 100))
+         warningForLoss = "⚠ LOSS > 2% - PLEASE STOP TRADING";
+
+      result =
+         "Today Balance : " + DoubleToString(var_TodayBalance,0) + "\n" +
+         riskPerPosition + "\n" +
+         "Today Profit/Loss : " + DoubleToString(todayProfit_loss,0) + "\n" +
+         warningForLoss;
+     }
+   return result;
+  }
+//+------------------------------------------------------------------+
+string CalculateSLInfoSmart(double entry, double sl, double lots)
+  {
+   double tick_value = SymbolInfoDouble(_Symbol,SYMBOL_TRADE_TICK_VALUE);
+   double tick_size  = SymbolInfoDouble(_Symbol,SYMBOL_TRADE_TICK_SIZE);
+
+// Try auto-fill from position
+   if(entry <= 0 || sl <= 0 || lots <= 0)
+     {
+      bool found = GetFirstSymbolPosition(entry, sl, lots);
+      if(!found)
+         return "SL Info : No open position on this symbol";
+     }
+
+   if(sl <= 0)
+      return "SL Info : StopLoss not set on position";
+
+   double distance = MathAbs(entry - sl);
+   double points   = distance / tick_size;
+   double lossUSD  = points * tick_value * lots;
+
+
+   return
+      "---- Trade Info (Auto) ----\n" +
+      "Entry Price : " + DoubleToString(entry,Digits()) + "\n" +
+      "Stop Loss   : " + DoubleToString(sl,Digits()) + "\n" +
+      "Lots        : " + DoubleToString(lots,2) + "\n" +
+      "TickValue   : " + DoubleToString(tick_value,2)+ "\n"+
+      "SL Distance : " + DoubleToString(points,1) + " points\n" +
+      "SL Loss ($) : " + DoubleToString(lossUSD,2);
+  }
+//+------------------------------------------------------------------+
+bool GetFirstSymbolPosition(double &entry, double &sl, double &lots)
+  {
+   for(int i=0; i<PositionsTotal(); i++)
+     {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0)
+         continue;
+
+      if(PositionSelectByTicket(ticket))
+        {
+         if(PositionGetString(POSITION_SYMBOL) == _Symbol)
+           {
+            entry = PositionGetDouble(POSITION_PRICE_OPEN);
+            sl    = PositionGetDouble(POSITION_SL);
+            lots  = PositionGetDouble(POSITION_VOLUME);
+            return true;
+           }
+        }
+     }
+   return false;
+  }
+
+struct SessionTime
+  {
+   string            name;
+   int               openHour;
+   int               closeHour;
+  };
+
+SessionTime sessions[3] =
+  {
+     {"Asia",    0,  9},
+     {"London",  8, 17},
+     {"NewYork",13, 22}
+  };
+
+//+------------------------------------------------------------------+
+//|                                                                  |
+//+------------------------------------------------------------------+
+datetime MakeDayTime(datetime day, int hour)
+  {
+   MqlDateTime t;
+   TimeToStruct(day, t);
+   t.hour = hour;
+   t.min  = 0;
+   t.sec  = 0;
+   return StructToTime(t);
+  }
+
+//+------------------------------------------------------------------+
+//|                                                                  |
+//+------------------------------------------------------------------+
+string ShowSession(string name,
+                   datetime openTime,
+                   datetime closeTime,
+                   bool isToday)
+  {
+   datetime now = TimeCurrent();
+
+   if(isToday && now < openTime)
+      return name + " : ---";
+
+   return name + " : " +
+          TimeToString(openTime, TIME_MINUTES) +
+          " - " +
+          TimeToString(closeTime, TIME_MINUTES);
+  }
+
+//+------------------------------------------------------------------+
+//|                                                                  |
+//+------------------------------------------------------------------+
+string GetSessionsInfo()
+  {
+   datetime now = TimeCurrent();
+
+   MqlDateTime ts;
+   TimeToStruct(now, ts);
+
+   string result = "";
+   result += "Market Time : " + TimeToString(now, TIME_SECONDS) + "\n";
+   result += "-------------------------\n";
+
+   ts.hour = ts.min = ts.sec = 0;
+   datetime today = StructToTime(ts);
+   datetime yesterday = today - 86400;
+
+   result += "Yesterday:\n";
+   result += ShowSessionFull("Asia   ", MakeDayTime(yesterday,0),  MakeDayTime(yesterday,9),  false) + "\n";
+   result += ShowSessionFull("London ", MakeDayTime(yesterday,8),  MakeDayTime(yesterday,17), false) + "\n";
+   result += ShowSessionFull("NewYork", MakeDayTime(yesterday,13), MakeDayTime(yesterday,22), false) + "\n";
+
+   result += "Today:\n";
+   result += ShowSessionFull("Asia   ", MakeDayTime(today,0),  MakeDayTime(today,9),  true) + "\n";
+   result += ShowSessionFull("London ", MakeDayTime(today,8),  MakeDayTime(today,17), true) + "\n";
+   result += ShowSessionFull("NewYork", MakeDayTime(today,13), MakeDayTime(today,22), true);
+
+   return result;
+  }
+
+//+------------------------------------------------------------------+
+bool GetSessionPrices(datetime startTime,
+                      datetime endTime,
+                      double &openPrice,
+                      double &closePrice)
+  {
+   int startShift = iBarShift(_Symbol, PERIOD_M1, startTime, false);
+   int endShift   = iBarShift(_Symbol, PERIOD_M1, endTime, false);
+
+   if(startShift < 0)
+      return false;
+
+   openPrice = iOpen(_Symbol, PERIOD_M1, startShift);
+
+   if(endShift >= 0)
+      closePrice = iClose(_Symbol, PERIOD_M1, endShift);
+
+   return true;
+  }
+//+------------------------------------------------------------------+
+//|                                                                  |
+//+------------------------------------------------------------------+
+string ShowSessionFull(string name,
+                       datetime openTime,
+                       datetime closeTime,
+                       bool isToday)
+  {
+   datetime now = TimeCurrent();
+
+   if(isToday && now < openTime)
+      return name + " : ---";
+
+   string result = name + " ";
+
+   result += TimeToString(openTime, TIME_MINUTES) + " - ";
+
+   if(isToday && now < closeTime)
+      result += TimeToString(closeTime, TIME_MINUTES);
+   else
+      result += TimeToString(closeTime, TIME_MINUTES);
+
+   double op = 0, cl = 0;
+   bool gotPrice = GetSessionPrices(openTime, closeTime, op, cl);
+
+   result += " | O: ";
+
+   if(!gotPrice || (isToday && now < openTime))
+      result += "---";
+   else
+      result += DoubleToString(op, Digits());
+
+   result += " C: ";
+
+   if(!gotPrice || (isToday && now < closeTime))
+      result += "---";
+   else
+      result += DoubleToString(cl, Digits());
+
+   return result;
+  }
+
+//+------------------------------------------------------------------+
